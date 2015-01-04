@@ -18,35 +18,70 @@ class GetGrades(QThread):
     tick = Signal(dict)
     seconds = 0
 
+    username = ""
+    password = ""
+
     def __init__(self, parent=None):
         super(GetGrades, self).__init__(parent)
 
-    def check(self):
+    def validate(self):
+        successful = False
+        self.tick.emit({"console":"Validating your login, please wait..."})
+        while not successful:
+          self.br.open(self.loginPage)
+          self.br.select_form(nr=1)
+          self.br.form['sid'] = self.username
+          self.br.form['PIN'] = self.password
+          self.br.submit()
+          response = self.br.response().read()
+          if (self.username=="") or (self.password=="") or ("You have entered an invalid McGill Username" in response):
+            self.tick.emit({"console":"<font color='red'><b>That user/pass combination is invalid. Please try again.</b></font>"})
+            return False
+          else:
+            self.tick.emit({"console":"<font color='green'><b>You have sucessfully logged in.</b></font>"})
+            successful = True
+            return True
+
+    def getTranscript(self):
+      #login
+      self.br.open(self.loginPage)
+      self.br.select_form(nr=1)
+      self.br.form['sid'] = self.username
+      self.br.form['PIN'] = self.password
+      self.br.submit()
+      #fetch transcript
+      self.br.open(self.transcriptPage)
+      grades = self.br.response().read()
+      self.br.open(self.logoutPage)
+      return grades
+
+
+
+    def check(self,grades):
 
         self.tick.emit({"console":"Checking..."})
-        # init transcript
-        grades = getTranscript()
 
-        newGrades = getTranscript()
+        newGrades = self.getTranscript()
         if 'UNOFFICIAL Transcript' not in newGrades:
             # probably problem with minerva/internet
-            self.tick.emit({"console":"<font color='red'>ERROR: Unable to fetch grades</font>"})
+            self.tick.emit({"console":"<font color='red'><b>[ERROR] Unable to fetch grades</b></font>"})
         if newGrades != grades:
-            grades = newGrades
-            print "OMG GRADES ARE UP"
-            time.sleep(1800)
+            self.tick.emit({"console":"<font color='green'><b>GRADES ARE UP (OMG!) - Best of luck!</b></font>"})
         else:
-            print "No new grades :("
-            time.sleep(30)
+            self.tick.emit({"console":"<font color='red'><b>No new grades :(</b></font>"})
 
     def run(self):
+        if self.validate() == False:
+          return False
         i = self.seconds
         self.tick.emit({"console":"Polling has begun."})
-        self.check()
+
+        # init transcript
+        grades = self.getTranscript()
+        self.check(grades)
         while(True):
             if (i > 0):
                 minutes = (i/60)
-
                 i -= 1
                 #self.progress.setValue(seconds - i)
                 self.tick.emit({"progress":self.seconds - i})
@@ -58,7 +93,7 @@ class GetGrades(QThread):
                     self.tick.emit({"console":str(i)+" seconds until next check"})
 
             else:
-                self.check()
+                self.check(grades)
                 i = self.seconds
             time.sleep(1)
 
@@ -69,7 +104,7 @@ class Form(QDialog):
     def __init__(self, parent=None):
         super(Form, self).__init__(parent)
 
-
+        self.seconds = 0
         self.setWindowTitle("gradeDay")
         self.setWindowIcon(QIcon('alarm.ico'))
         if os.name == 'nt':
@@ -95,8 +130,9 @@ class Form(QDialog):
         self.pollIntervalLabel.setText("Poll Interval (minutes)")
         self.pollIntervalLabel.setAlignment(Qt.AlignRight)
         self.pollIntervalSpinBox = QSpinBox()
-        self.pollIntervalSpinBox.setMinimum(30)
+        self.pollIntervalSpinBox.setMinimum(15)
         self.pollIntervalSpinBox.setValue(30)
+
 
         self.submit = QPushButton()
         self.submit.setText("Check My Grades!")
@@ -106,6 +142,7 @@ class Form(QDialog):
         self.progress.setRange(0,(30*60))
         self.progress.setValue(self.pollIntervalSpinBox.value()*60)
 
+        self.pollIntervalSpinBox.valueChanged.connect(self.changeProgressMaximum)
 
 
         self.log = QTextBrowser()
@@ -125,11 +162,17 @@ class Form(QDialog):
         layout.addWidget(self.log, 7,0,2,0)
         self.setLayout(layout)
 
+    def changeProgressMaximum(self):
+      self.progress.setMaximum(self.pollIntervalSpinBox.value()*60)
+      self.progress.setValue(self.pollIntervalSpinBox.value()*60)
 
     def poll(self):
         self.getGrades = GetGrades()
         self.getGrades.tick.connect(self.updateProgress, Qt.QueuedConnection)
         self.getGrades.seconds = self.pollIntervalSpinBox.value()*60
+        self.seconds = self.pollIntervalSpinBox.value()*60
+        self.getGrades.username = self.userTextBox.text()
+        self.getGrades.password = self.passTextBox.text()
         self.getGrades.start()
 
     def updateProgress(self, data):
@@ -137,6 +180,12 @@ class Form(QDialog):
             self.log.append(data["console"])
         if "progress" in data:
             self.progress.setValue(data["progress"])
+            rem = self.seconds - data["progress"]
+            if rem < 60:
+              self.progress.setFormat(str(rem)+"s rem.")
+            else:
+              minutes = rem/60
+              self.progress.setFormat(str(minutes)+"min rem.")
 
 
 
