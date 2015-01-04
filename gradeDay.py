@@ -6,17 +6,68 @@ import mechanize
 import cookielib
 import time
 
+
+class GetGrades(QThread):
+    loginPage = 'https://horizon.mcgill.ca/pban1/twbkwbis.P_WWWLogin'
+    logoutPage = 'https://horizon.mcgill.ca/pban1/twbkwbis.P_Logout'
+    transcriptPage = 'https://horizon.mcgill.ca/pban1/bzsktran.P_Display_Form?user_type=S&tran_type=V'
+    br = mechanize.Browser()
+    cj = cookielib.CookieJar()
+    br.set_cookiejar(cj)
+
+    tick = Signal(dict)
+    seconds = 0
+
+    def __init__(self, parent=None):
+        super(GetGrades, self).__init__(parent)
+
+    def check(self):
+
+        self.tick.emit({"console":"Checking..."})
+        # init transcript
+        grades = getTranscript()
+
+        newGrades = getTranscript()
+        if 'UNOFFICIAL Transcript' not in newGrades:
+            # probably problem with minerva/internet
+            self.tick.emit({"console":"<font color='red'>ERROR: Unable to fetch grades</font>"})
+        if newGrades != grades:
+            grades = newGrades
+            print "OMG GRADES ARE UP"
+            time.sleep(1800)
+        else:
+            print "No new grades :("
+            time.sleep(30)
+
+    def run(self):
+        i = self.seconds
+        self.tick.emit({"console":"Polling has begun."})
+        self.check()
+        while(True):
+            if (i > 0):
+                minutes = (i/60)
+
+                i -= 1
+                #self.progress.setValue(seconds - i)
+                self.tick.emit({"progress":self.seconds - i})
+                if minutes % 5 == 0:
+                    #self.log.append(str(minutes)+" minutes remaining")
+                    self.tick.emit({"console":str(minutes)+" minutes until next check"})
+                if i < 60 and minutes % 5:
+                    #self.log.append(str(i)+" seconds remaining")
+                    self.tick.emit({"console":str(i)+" seconds until next check"})
+
+            else:
+                self.check()
+                i = self.seconds
+            time.sleep(1)
+
+
+
 class Form(QDialog):
 
     def __init__(self, parent=None):
         super(Form, self).__init__(parent)
-
-        self.loginPage = 'https://horizon.mcgill.ca/pban1/twbkwbis.P_WWWLogin'
-        self.logoutPage = 'https://horizon.mcgill.ca/pban1/twbkwbis.P_Logout'
-        self.transcriptPage = 'https://horizon.mcgill.ca/pban1/bzsktran.P_Display_Form?user_type=S&tran_type=V'
-        self.br = mechanize.Browser()
-        self.cj = cookielib.CookieJar()
-        self.br.set_cookiejar(cj)
 
 
         self.setWindowTitle("gradeDay")
@@ -45,15 +96,17 @@ class Form(QDialog):
         self.pollIntervalLabel.setAlignment(Qt.AlignRight)
         self.pollIntervalSpinBox = QSpinBox()
         self.pollIntervalSpinBox.setMinimum(30)
+        self.pollIntervalSpinBox.setValue(30)
 
         self.submit = QPushButton()
         self.submit.setText("Check My Grades!")
-        self.submit.returnPressed.connect(self.poll)
+        self.submit.released.connect(self.poll)
 
         self.progress = QProgressBar()
         self.progress.setRange(0,(30*60))
-        self.progress.setValue(30)
-        #self.progress.setFormat("0")
+        self.progress.setValue(self.pollIntervalSpinBox.value()*60)
+
+
 
         self.log = QTextBrowser()
         self.log.append("Enter your user and pass and hit the button")
@@ -73,8 +126,17 @@ class Form(QDialog):
         self.setLayout(layout)
 
 
-   def poll(self):
-     pass
+    def poll(self):
+        self.getGrades = GetGrades()
+        self.getGrades.tick.connect(self.updateProgress, Qt.QueuedConnection)
+        self.getGrades.seconds = self.pollIntervalSpinBox.value()*60
+        self.getGrades.start()
+
+    def updateProgress(self, data):
+        if "console" in data:
+            self.log.append(data["console"])
+        if "progress" in data:
+            self.progress.setValue(data["progress"])
 
 
 
