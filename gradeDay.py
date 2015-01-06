@@ -1,3 +1,17 @@
+####################
+#
+# gradeDay by Joseph Szymborski
+# a fork of Tina Latif's minervahacker/GetGrades
+#
+# This Source Code Form is subject to the
+# terms of the Mozilla Public License, v.
+# 2.0. If a copy of the MPL was not
+# distributed with this file, You can
+# obtain one at
+# http://mozilla.org/MPL/2.0/.
+#
+# ##################
+
 from PySide.QtGui import *
 from PySide.QtCore import *
 import sys
@@ -16,6 +30,7 @@ class GetGrades(QThread):
     br.set_cookiejar(cj)
 
     tick = Signal(dict)
+    gradesUpdated = Signal(int)
     seconds = 0
 
     username = ""
@@ -62,13 +77,52 @@ class GetGrades(QThread):
         self.tick.emit({"console":"Checking..."})
 
         newGrades = self.getTranscript()
+
         if 'UNOFFICIAL Transcript' not in newGrades:
             # probably problem with minerva/internet
             self.tick.emit({"console":"<font color='red'><b>[ERROR] Unable to fetch grades</b></font>"})
         if newGrades != grades:
             self.tick.emit({"console":"<font color='green'><b>GRADES ARE UP (OMG!) - Best of luck!</b></font>"})
+            self.sendEmailNotif()
+            self.gradesUpdated.emit(True)
         else:
             self.tick.emit({"console":"<font color='red'><b>No new grades :(</b></font>"})
+
+    def sendEmailNotif(self):
+        import smtplib
+        import random
+        import re
+        session = smtplib.SMTP("smtp.mcgill.ca",587)
+        result  = session.ehlo()
+        if result[0] != 250:
+            return (False, "No response from server.")
+
+        result = session.starttls()
+
+
+        if result[0] != 220:
+            return (False, "Couldn't start STARTTLS session.")
+
+        result = session.login(self.username, self.password)
+        if result[0] != 235:
+            return (False, "Authentication failed.")
+
+        if re.match("[\w,\.,\d,-]*@mail.mcgill.ca",self.username) == None:
+            return (False, "Invalid email.")
+
+        headers = ["from: "+self.username,
+                    "subject: Your Grades Have Been Updated!",
+                    "to: "+self.username,
+                    "mime-version: 1.0",
+                    "content-type: text"]
+        headers = "\r\n".join(headers)
+
+        tagPool = ["\"C's get degrees\" \r\n ~ McGill Proverb","PS: Stop e-mailing yourself, ya' crazy person", "PS: You may have won a free ice-cream at Frostbite", "PS: You'll feel better if you write an article for the McGill Daily about how your marks are a major cause of microagression/rape culture/gender binaries/race hate/priviledge/triggers"]
+        tag = random.choice(tagPool)
+        body = "Hi!\r\nDon't freak, but your grades have been updated (OMG!).\r\nWhat are you waiting for, rush to Minerva, mistype your password a billion times in nervous anticipation and find out what the damage is. \r\nLove, \r\nJoseph from gradeDay\r\n\r\n"+tag
+
+        session.sendmail(self.username,self.username,headers+"\r\r\n"+body)
+        return (True, "Success")
 
     def run(self):
         if self.validate() == False:
@@ -82,15 +136,16 @@ class GetGrades(QThread):
         while(True):
             if (i > 0):
                 minutes = (i/60)
+                minuteFloat = (float(i)/60.0)
                 i -= 1
                 #self.progress.setValue(seconds - i)
                 self.tick.emit({"progress":self.seconds - i})
-                if minutes % 5 == 0:
+                if minuteFloat % 5 == 0:
                     #self.log.append(str(minutes)+" minutes remaining")
-                    self.tick.emit({"console":str(minutes)+" minutes until next check"})
+                    self.tick.emit({"console":"<font color='black'>"+str(minutes)+" minutes until next check</font>"})
                 if i < 60 and minutes % 5:
                     #self.log.append(str(i)+" seconds remaining")
-                    self.tick.emit({"console":str(i)+" seconds until next check"})
+                    self.tick.emit({"console":"<font color='black'>"+str(i)+" seconds until next check</font>"})
 
             else:
                 self.check(grades)
@@ -103,15 +158,24 @@ class Form(QDialog):
 
     def __init__(self, parent=None):
         super(Form, self).__init__(parent)
-
+        self.alertSound = None
+        self.alarm = None
+        self.app = None
+        self.getGrades = None
         self.seconds = 0
         self.setWindowTitle("gradeDay")
-        self.setWindowIcon(QIcon('alarm.ico'))
+        self.setWindowIcon(QIcon('alert-icon.png'))
+        self.setWindowFlags(Qt.WindowMinimizeButtonHint)
         if os.name == 'nt':
             # This is needed to display the app icon on the taskbar on Windows 7
             import ctypes
             myappid = 'JosephSzymborski.gradeDay.1.0.0' # arbitrary string
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
+
+        self.appTitle = QLabel(self)
+        self.appTitle.setText("<font size='58'><b>gradeDay</b></font>")
+        self.appTitle.setAlignment(Qt.AlignCenter)
 
         self.userLabel = QLabel(self)
         self.userLabel.setText("McGill Username:")
@@ -130,9 +194,8 @@ class Form(QDialog):
         self.pollIntervalLabel.setText("Poll Interval (minutes)")
         self.pollIntervalLabel.setAlignment(Qt.AlignRight)
         self.pollIntervalSpinBox = QSpinBox()
-        self.pollIntervalSpinBox.setMinimum(15)
         self.pollIntervalSpinBox.setValue(30)
-
+        self.pollIntervalSpinBox.setMinimum(15)
 
         self.submit = QPushButton()
         self.submit.setText("Check My Grades!")
@@ -140,40 +203,58 @@ class Form(QDialog):
 
         self.progress = QProgressBar()
         self.progress.setRange(0,(30*60))
-        self.progress.setValue(self.pollIntervalSpinBox.value()*60)
+        self.progress.setFormat("0s rem.")
+        self.progress.setValue(30*60)
 
-        self.pollIntervalSpinBox.valueChanged.connect(self.changeProgressMaximum)
+
 
 
         self.log = QTextBrowser()
         self.log.append("Enter your user and pass and hit the button")
 
+        self.about = QPushButton()
+        self.about.setIcon(QIcon("info.png"))
 
+        self.about.released.connect(self.showAbout)
 
         layout = QGridLayout()
-        layout.addWidget(self.userLabel, 0,0)
-        layout.addWidget(self.userTextBox, 0,1)
-        layout.addWidget(self.passLabel, 1,0)
-        layout.addWidget(self.passTextBox, 1,1)
-        layout.addWidget(self.pollIntervalLabel,2,0)
-        layout.addWidget(self.pollIntervalSpinBox,2,1)
-        layout.addWidget(self.submit, 3,0,2,0)
-        layout.addWidget(self.progress, 5,0,2,0)
-        layout.addWidget(self.log, 7,0,2,0)
+        layout.addWidget(self.appTitle, 0,0,2,0)
+        layout.addWidget(self.userLabel, 2,0)
+        layout.addWidget(self.userTextBox, 2,1)
+        layout.addWidget(self.passLabel, 3,0)
+        layout.addWidget(self.passTextBox, 3,1)
+        layout.addWidget(self.pollIntervalLabel,4,0)
+        layout.addWidget(self.pollIntervalSpinBox,4,1)
+        layout.addWidget(self.submit, 5,0,2,0)
+        layout.addWidget(self.progress, 7,0,2,0)
+        layout.addWidget(self.log, 9,0,2,0)
+        layout.addWidget(self.about, 9,3)
         self.setLayout(layout)
 
-    def changeProgressMaximum(self):
-      self.progress.setMaximum(self.pollIntervalSpinBox.value()*60)
-      self.progress.setValue(self.pollIntervalSpinBox.value()*60)
 
     def poll(self):
-        self.getGrades = GetGrades()
-        self.getGrades.tick.connect(self.updateProgress, Qt.QueuedConnection)
-        self.getGrades.seconds = self.pollIntervalSpinBox.value()*60
-        self.seconds = self.pollIntervalSpinBox.value()*60
-        self.getGrades.username = self.userTextBox.text()
-        self.getGrades.password = self.passTextBox.text()
-        self.getGrades.start()
+        if self.alarm == True:
+            self.alertSound.stop()
+            self.alarm = False
+            self.submit.setText("Check My Grades!")
+            self.submit.setIcon(QIcon())
+            self.appTitle.setText("<font size='58'><b>gradeDay</b></font>")
+
+        else:
+            if self.getGrades is not None and self.getGrades.isRunning():
+                self.getGrades.terminate()
+                self.getGrades.wait()
+            self.progress.setMaximum(self.pollIntervalSpinBox.value()*60)
+            self.getGrades = GetGrades()
+            self.getGrades.tick.connect(self.updateProgress, Qt.QueuedConnection)
+            self.getGrades.gradesUpdated.connect(self.alert)
+            self.getGrades.seconds = self.pollIntervalSpinBox.value()*60
+            self.seconds = self.pollIntervalSpinBox.value()*60
+            self.getGrades.username = self.userTextBox.text()
+            self.getGrades.password = self.passTextBox.text()
+            self.getGrades.start()
+
+
 
     def updateProgress(self, data):
         if "console" in data:
@@ -188,8 +269,44 @@ class Form(QDialog):
               self.progress.setFormat(str(minutes)+"min rem.")
 
 
+    def alert(self, status):
+        if status == 1:
+            self.appTitle.setText("<font size='58' color='red'><b>GRADES UP (OMG)</b></font>")
+            self.submit.setText("Turn Off Alarm")
+            self.submit.setIcon(QIcon("close.png"))
+            self.alertSound = QSound("voicealert.wav")
+            self.alertSound.play()
+            self.alarm = True
+
+
+    def closeEvent(self, event):
+        self.alertSound.stop()
+
+
+    def showAbout(self):
+        about = About()
+        about.exec_()
+
+
+
+class About(QDialog):
+    def __init__(self, parent=None):
+        super(About, self).__init__(parent)
+        self.setWindowTitle("About")
+        self.setWindowIcon(QIcon('alert-icon.png'))
+
+        self.aboutTextBrowser = QTextBrowser()
+        self.aboutTextBrowser.setSource("about.html")
+
+        layout = QGridLayout()
+        layout.addWidget(self.aboutTextBrowser, 0,0)
+        self.setLayout(layout)
+
+
+
 
 app = QApplication(sys.argv)
 form = Form()
+form.app = app
 form.show()
 app.exec_()

@@ -1,0 +1,9 @@
+('C:\\Users\\Joseph\\Documents\\projects\\python\\gradeDay\\build\\gradeDay\\gradeDay.exe',
+ False,
+ False,
+ 'alert.ico',
+ None,
+ [],
+ None,
+ True,
+ 1420515509L)

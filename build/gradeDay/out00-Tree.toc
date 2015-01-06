@@ -1,0 +1,5 @@
+('images',
+ 'images',
+ [],
+ [('images\\pysidelogo.png', 'images\\pysidelogo.png', 'DATA'),
+  ('images\\pythonlogo.png', 'images\\pythonlogo.png', 'DATA')])
